@@ -116,9 +116,59 @@ struct Parser<'a> {
 }
 
 impl Parser<'_> {
-    fn off(&self) -> usize {
-        self.src.len() - self.iter.as_str().len()
+    fn parse(mut self) -> Result<Duration, Error> {
+        let mut n = self.parse_first_char()?.ok_or(Error::Empty)?; // integer part
+        'outer: loop {
+            let mut frac = None; // fractional part
+            let mut off = self.off();
+            while let Some(c) = self.iter.next() {
+                match c {
+                    '0'..='9' => {
+                        n = n
+                            .checked_mul(10)
+                            .and_then(|x| x.checked_add(c as u64 - '0' as u64))
+                            .ok_or(Error::NumberOverflow)?;
+                    }
+                    c if c.is_whitespace() => {}
+                    'a'..='z' | 'A'..='Z' | 'µ' => {
+                        break;
+                    }
+                    '.' => {
+                        // decimal separator, the fractional part begins now
+                        frac = Some(self.parse_fractional_part(&mut off)?);
+                        break;
+                    }
+                    _ => {
+                        return Err(Error::InvalidCharacter(off));
+                    }
+                }
+                off = self.off();
+            }
+            let start = off;
+            let mut off = self.off();
+            while let Some(c) = self.iter.next() {
+                match c {
+                    '0'..='9' => {
+                        self.parse_unit(n, frac, start, off)?;
+                        n = c as u64 - '0' as u64;
+                        continue 'outer;
+                    }
+                    c if c.is_whitespace() => break,
+                    'a'..='z' | 'A'..='Z' | 'µ' => {}
+                    _ => {
+                        return Err(Error::InvalidCharacter(off));
+                    }
+                }
+                off = self.off();
+            }
+            self.parse_unit(n, frac, start, off)?;
+            n = match self.parse_first_char()? {
+                Some(n) => n,
+                None => return Ok(Duration::new(self.current.0, self.current.1 as u32)),
+            };
+        }
     }
+
 
     fn parse_first_char(&mut self) -> Result<Option<u64>, Error> {
         let off = self.off();
@@ -136,15 +186,49 @@ impl Parser<'_> {
         Ok(None)
     }
 
-    fn add_current(&mut self, mut sec: u64, nsec: u64) -> Result<(), Error> {
-        let mut nsec = self.current.1.add(nsec)?;
-        if nsec > 1_000_000_000 {
-            sec = sec.add(nsec / 1_000_000_000)?;
-            nsec %= 1_000_000_000;
+    fn parse_fractional_part(&mut self, off: &mut usize) -> Result<Fraction, Error> {
+        let mut numerator = 0u64;
+        let mut denominator = 1u64;
+        let mut zeros = true;
+        while let Some(c) = self.iter.next() {
+            match c {
+                '0' => {
+                    denominator = denominator.checked_mul(10).ok_or(Error::NumberOverflow)?;
+                    if !zeros {
+                        numerator = numerator.checked_mul(10).ok_or(Error::NumberOverflow)?;
+                    }
+                }
+                '1'..='9' => {
+                    zeros = false;
+                    denominator = denominator.checked_mul(10).ok_or(Error::NumberOverflow)?;
+                    numerator = numerator
+                        .checked_mul(10)
+                        .and_then(|x| x.checked_add(c as u64 - '0' as u64))
+                        .ok_or(Error::NumberOverflow)?;
+                }
+                c if c.is_whitespace() => {}
+                'a'..='z' | 'A'..='Z' | 'µ' => {
+                    break;
+                }
+                _ => {
+                    return Err(Error::InvalidCharacter(*off));
+                }
+            };
+            // update the offset used by the parsing loop
+            *off = self.off();
         }
-        sec = self.current.0.add(sec)?;
-        self.current = (sec, nsec);
-        Ok(())
+        if denominator == 1 {
+            // no digits were given after the separator, e.g. "1."
+            return Err(Error::InvalidCharacter(*off));
+        }
+        Ok(Fraction {
+            numerator,
+            denominator,
+        })
+    }
+
+    fn off(&self) -> usize {
+        self.src.len() - self.iter.as_str().len()
     }
 
     fn parse_unit(
@@ -213,98 +297,15 @@ impl Parser<'_> {
         Ok(())
     }
 
-    fn parse_fractional_part(&mut self, off: &mut usize) -> Result<Fraction, Error> {
-        let mut numerator = 0u64;
-        let mut denominator = 1u64;
-        let mut zeros = true;
-        while let Some(c) = self.iter.next() {
-            match c {
-                '0' => {
-                    denominator = denominator.checked_mul(10).ok_or(Error::NumberOverflow)?;
-                    if !zeros {
-                        numerator = numerator.checked_mul(10).ok_or(Error::NumberOverflow)?;
-                    }
-                }
-                '1'..='9' => {
-                    zeros = false;
-                    denominator = denominator.checked_mul(10).ok_or(Error::NumberOverflow)?;
-                    numerator = numerator
-                        .checked_mul(10)
-                        .and_then(|x| x.checked_add(c as u64 - '0' as u64))
-                        .ok_or(Error::NumberOverflow)?;
-                }
-                c if c.is_whitespace() => {}
-                'a'..='z' | 'A'..='Z' | 'µ' => {
-                    break;
-                }
-                _ => {
-                    return Err(Error::InvalidCharacter(*off));
-                }
-            };
-            // update the offset used by the parsing loop
-            *off = self.off();
+    fn add_current(&mut self, mut sec: u64, nsec: u64) -> Result<(), Error> {
+        let mut nsec = self.current.1.add(nsec)?;
+        if nsec > 1_000_000_000 {
+            sec = sec.add(nsec / 1_000_000_000)?;
+            nsec %= 1_000_000_000;
         }
-        if denominator == 1 {
-            // no digits were given after the separator, e.g. "1."
-            return Err(Error::InvalidCharacter(*off));
-        }
-        Ok(Fraction {
-            numerator,
-            denominator,
-        })
-    }
-
-    fn parse(mut self) -> Result<Duration, Error> {
-        let mut n = self.parse_first_char()?.ok_or(Error::Empty)?; // integer part
-        'outer: loop {
-            let mut frac = None; // fractional part
-            let mut off = self.off();
-            while let Some(c) = self.iter.next() {
-                match c {
-                    '0'..='9' => {
-                        n = n
-                            .checked_mul(10)
-                            .and_then(|x| x.checked_add(c as u64 - '0' as u64))
-                            .ok_or(Error::NumberOverflow)?;
-                    }
-                    c if c.is_whitespace() => {}
-                    'a'..='z' | 'A'..='Z' | 'µ' => {
-                        break;
-                    }
-                    '.' => {
-                        // decimal separator, the fractional part begins now
-                        frac = Some(self.parse_fractional_part(&mut off)?);
-                        break;
-                    }
-                    _ => {
-                        return Err(Error::InvalidCharacter(off));
-                    }
-                }
-                off = self.off();
-            }
-            let start = off;
-            let mut off = self.off();
-            while let Some(c) = self.iter.next() {
-                match c {
-                    '0'..='9' => {
-                        self.parse_unit(n, frac, start, off)?;
-                        n = c as u64 - '0' as u64;
-                        continue 'outer;
-                    }
-                    c if c.is_whitespace() => break,
-                    'a'..='z' | 'A'..='Z' | 'µ' => {}
-                    _ => {
-                        return Err(Error::InvalidCharacter(off));
-                    }
-                }
-                off = self.off();
-            }
-            self.parse_unit(n, frac, start, off)?;
-            n = match self.parse_first_char()? {
-                Some(n) => n,
-                None => return Ok(Duration::new(self.current.0, self.current.1 as u32)),
-            };
-        }
+        sec = self.current.0.add(sec)?;
+        self.current = (sec, nsec);
+        Ok(())
     }
 }
 
