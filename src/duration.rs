@@ -112,7 +112,7 @@ struct Fraction {
 struct Parser<'a> {
     iter: Chars<'a>,
     src: &'a str,
-    current: (u64, u32),
+    current: Duration,
 }
 
 impl Parser<'_> {
@@ -164,7 +164,7 @@ impl Parser<'_> {
             self.parse_unit(n, frac, start, off)?;
             n = match self.parse_first_char()? {
                 Some(n) => n,
-                None => return Ok(Duration::new(self.current.0, self.current.1 as u32)),
+                None => return Ok(self.current),
             };
         }
     }
@@ -288,13 +288,13 @@ impl Parser<'_> {
     }
 
     fn add_current(&mut self, mut sec: u64, nsec: u64) -> Result<(), Error> {
-        let mut nsec = (self.current.1 as u64).add(nsec)?;
+        let mut nsec = (self.current.subsec_nanos() as u64).add(nsec)?;
         if nsec > 1_000_000_000 {
             sec = sec.add(nsec / 1_000_000_000)?;
             nsec %= 1_000_000_000;
         }
-        sec = self.current.0.add(sec)?;
-        self.current = (sec, nsec as u32);
+        sec = self.current.as_secs().add(sec)?;
+        self.current = Duration::new(sec, nsec as u32);
         Ok(())
     }
 }
@@ -365,7 +365,7 @@ pub fn parse_duration(s: &str) -> Result<Duration, Error> {
     Parser {
         iter: s.chars(),
         src: s,
-        current: (0, 0),
+        current: Duration::ZERO,
     }
     .parse()
 }
