@@ -112,7 +112,7 @@ struct Fraction {
 struct Parser<'a> {
     iter: Chars<'a>,
     src: &'a str,
-    current: (u64, u64),
+    current: (u64, u32),
 }
 
 impl Parser<'_> {
@@ -288,13 +288,13 @@ impl Parser<'_> {
     }
 
     fn add_current(&mut self, mut sec: u64, nsec: u64) -> Result<(), Error> {
-        let mut nsec = self.current.1.add(nsec)?;
+        let mut nsec = (self.current.1 as u64).add(nsec)?;
         if nsec > 1_000_000_000 {
             sec = sec.add(nsec / 1_000_000_000)?;
             nsec %= 1_000_000_000;
         }
         sec = self.current.0.add(sec)?;
-        self.current = (sec, nsec);
+        self.current = (sec, nsec as u32);
         Ok(())
     }
 }
