@@ -1,6 +1,6 @@
 use std::error::Error as StdError;
 use std::fmt;
-use std::str::Chars;
+use std::str::{Chars, FromStr};
 use std::time::Duration;
 
 /// Error parsing human-friendly duration
@@ -169,7 +169,6 @@ impl Parser<'_> {
         }
     }
 
-
     fn parse_first_char(&mut self) -> Result<Option<u64>, Error> {
         let off = self.off();
         for c in self.iter.by_ref() {
@@ -238,31 +237,30 @@ impl Parser<'_> {
         start: usize,
         end: usize,
     ) -> Result<(), Error> {
-        let unit = &self.src[start..end];
-        // add the integer part
-        let (sec, nsec) = match unit {
-            "nanos" | "nsec" | "ns" => (0u64, n),
-            "usec" | "us" | "µs" => (0u64, n.mul(1000)?),
-            "millis" | "msec" | "ms" => (0u64, n.mul(1_000_000)?),
-            "seconds" | "second" | "secs" | "sec" | "s" => (n, 0),
-            "minutes" | "minute" | "min" | "mins" | "m" => (n.mul(60)?, 0),
-            "hours" | "hour" | "hr" | "hrs" | "h" => (n.mul(3600)?, 0),
-            "days" | "day" | "d" => (n.mul(86400)?, 0),
-            "weeks" | "week" | "wk" | "wks" | "w" => (n.mul(86400 * 7)?, 0),
-            "months" | "month" | "M" => (n.mul(2_630_016)?, 0), // 30.44d
-            "years" | "year" | "yr" | "yrs" | "y" => (n.mul(31_557_600)?, 0), // 365.25d
-            _ => {
-                if self.src.chars().all(|c| c == '0') {
-                    self.current = (0, 0);
-                    return Ok(());
-                }
+        let unit = match Unit::from_str(&self.src[start..end]) {
+            Ok(u) => u,
+            Err(()) => {
                 return Err(Error::UnknownUnit {
                     start,
                     end,
-                    unit: unit.to_string(),
+                    unit: self.src[start..end].to_owned(),
                     value: n,
                 });
             }
+        };
+
+        // add the integer part
+        let (sec, nsec) = match unit {
+            Unit::Nanosecond => (0u64, n),
+            Unit::Microsecond => (0u64, n.mul(1000)?),
+            Unit::Millisecond => (0u64, n.mul(1_000_000)?),
+            Unit::Second => (n, 0),
+            Unit::Minute => (n.mul(60)?, 0),
+            Unit::Hour => (n.mul(3600)?, 0),
+            Unit::Day => (n.mul(86400)?, 0),
+            Unit::Week => (n.mul(86400 * 7)?, 0),
+            Unit::Month => (n.mul(2_630_016)?, 0), // 30.44d
+            Unit::Year => (n.mul(31_557_600)?, 0), // 365.25d
         };
         self.add_current(sec, nsec)?;
 
@@ -273,24 +271,16 @@ impl Parser<'_> {
         }) = frac
         {
             let (sec, nsec) = match unit {
-                "nanos" | "nsec" | "ns" => return Err(Error::NumberOverflow),
-                "usec" | "us" | "µs" => (0, n.mul(1000)?.div(d)?),
-                "millis" | "msec" | "ms" => (0, n.mul(1_000_000)?.div(d)?),
-                "seconds" | "second" | "secs" | "sec" | "s" => (0, n.mul(1_000_000_000)?.div(d)?),
-                "minutes" | "minute" | "min" | "mins" | "m" => (0, n.mul(60_000_000_000)?.div(d)?),
-                "hours" | "hour" | "hr" | "hrs" | "h" => (n.mul(3600)?.div(d)?, 0),
-                "days" | "day" | "d" => (n.mul(86400)?.div(d)?, 0),
-                "weeks" | "week" | "wk" | "wks" | "w" => (n.mul(86400 * 7)?.div(d)?, 0),
-                "months" | "month" | "M" => (n.mul(2_630_016)?.div(d)?, 0), // 30.44d
-                "years" | "year" | "yr" | "yrs" | "y" => (n.mul(31_557_600)?.div(d)?, 0), // 365.25d
-                _ => {
-                    return Err(Error::UnknownUnit {
-                        start,
-                        end,
-                        unit: self.src[start..end].to_string(),
-                        value: n,
-                    });
-                }
+                Unit::Nanosecond => return Err(Error::NumberOverflow),
+                Unit::Microsecond => (0, n.mul(1000)?.div(d)?),
+                Unit::Millisecond => (0, n.mul(1_000_000)?.div(d)?),
+                Unit::Second => (0, n.mul(1_000_000_000)?.div(d)?),
+                Unit::Minute => (0, n.mul(60_000_000_000)?.div(d)?),
+                Unit::Hour => (n.mul(3600)?.div(d)?, 0),
+                Unit::Day => (n.mul(86400)?.div(d)?, 0),
+                Unit::Week => (n.mul(86400 * 7)?.div(d)?, 0),
+                Unit::Month => (n.mul(2_630_016)?.div(d)?, 0), // 30.44d
+                Unit::Year => (n.mul(31_557_600)?.div(d)?, 0), // 365.25d
             };
             self.add_current(sec, nsec)?;
         }
@@ -306,6 +296,39 @@ impl Parser<'_> {
         sec = self.current.0.add(sec)?;
         self.current = (sec, nsec);
         Ok(())
+    }
+}
+
+enum Unit {
+    Nanosecond,
+    Microsecond,
+    Millisecond,
+    Second,
+    Minute,
+    Hour,
+    Day,
+    Week,
+    Month,
+    Year,
+}
+
+impl FromStr for Unit {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "nanos" | "nsec" | "ns" => Ok(Self::Nanosecond),
+            "usec" | "us" | "µs" => Ok(Self::Microsecond),
+            "millis" | "msec" | "ms" => Ok(Self::Millisecond),
+            "seconds" | "second" | "secs" | "sec" | "s" => Ok(Self::Second),
+            "minutes" | "minute" | "min" | "mins" | "m" => Ok(Self::Minute),
+            "hours" | "hour" | "hr" | "hrs" | "h" => Ok(Self::Hour),
+            "days" | "day" | "d" => Ok(Self::Day),
+            "weeks" | "week" | "wk" | "wks" | "w" => Ok(Self::Week),
+            "months" | "month" | "M" => Ok(Self::Month),
+            "years" | "year" | "yr" | "yrs" | "y" => Ok(Self::Year),
+            _ => Err(()),
+        }
     }
 }
 
