@@ -112,12 +112,12 @@ struct Fraction {
 struct Parser<'a> {
     iter: Chars<'a>,
     src: &'a str,
-    current: Duration,
 }
 
 impl Parser<'_> {
     fn parse(mut self) -> Result<Duration, Error> {
         let mut n = self.parse_first_char()?.ok_or(Error::Empty)?; // integer part
+        let mut out = Duration::ZERO;
         'outer: loop {
             let mut frac = None; // fractional part
             let mut off = self.off();
@@ -149,7 +149,7 @@ impl Parser<'_> {
             while let Some(c) = self.iter.next() {
                 match c {
                     '0'..='9' => {
-                        self.parse_unit(n, frac, start, off)?;
+                        self.parse_unit(n, frac, start, off, &mut out)?;
                         n = c as u64 - '0' as u64;
                         continue 'outer;
                     }
@@ -161,10 +161,11 @@ impl Parser<'_> {
                 }
                 off = self.off();
             }
-            self.parse_unit(n, frac, start, off)?;
+
+            self.parse_unit(n, frac, start, off, &mut out)?;
             n = match self.parse_first_char()? {
                 Some(n) => n,
-                None => return Ok(self.current),
+                None => return Ok(out),
             };
         }
     }
@@ -236,6 +237,7 @@ impl Parser<'_> {
         frac: Option<Fraction>,
         start: usize,
         end: usize,
+        out: &mut Duration,
     ) -> Result<(), Error> {
         let unit = match Unit::from_str(&self.src[start..end]) {
             Ok(u) => u,
@@ -262,7 +264,7 @@ impl Parser<'_> {
             Unit::Month => (n.mul(2_630_016)?, 0), // 30.44d
             Unit::Year => (n.mul(31_557_600)?, 0), // 365.25d
         };
-        self.add_current(sec, nsec)?;
+        add_current(sec, nsec, out)?;
 
         // add the fractional part
         if let Some(Fraction {
@@ -282,21 +284,22 @@ impl Parser<'_> {
                 Unit::Month => (n.mul(2_630_016)?.div(d)?, 0), // 30.44d
                 Unit::Year => (n.mul(31_557_600)?.div(d)?, 0), // 365.25d
             };
-            self.add_current(sec, nsec)?;
+            add_current(sec, nsec, out)?;
         }
-        Ok(())
-    }
 
-    fn add_current(&mut self, mut sec: u64, nsec: u64) -> Result<(), Error> {
-        let mut nsec = (self.current.subsec_nanos() as u64).add(nsec)?;
-        if nsec > 1_000_000_000 {
-            sec = sec.add(nsec / 1_000_000_000)?;
-            nsec %= 1_000_000_000;
-        }
-        sec = self.current.as_secs().add(sec)?;
-        self.current = Duration::new(sec, nsec as u32);
         Ok(())
     }
+}
+
+fn add_current(mut sec: u64, nsec: u64, out: &mut Duration) -> Result<(), Error> {
+    let mut nsec = (out.subsec_nanos() as u64).add(nsec)?;
+    if nsec > 1_000_000_000 {
+        sec = sec.add(nsec / 1_000_000_000)?;
+        nsec %= 1_000_000_000;
+    }
+    sec = out.as_secs().add(sec)?;
+    *out = Duration::new(sec, nsec as u32);
+    Ok(())
 }
 
 enum Unit {
@@ -365,7 +368,6 @@ pub fn parse_duration(s: &str) -> Result<Duration, Error> {
     Parser {
         iter: s.chars(),
         src: s,
-        current: Duration::ZERO,
     }
     .parse()
 }
