@@ -1,7 +1,7 @@
 use std::error::Error as StdError;
 use std::fmt;
 use std::str::{Chars, FromStr};
-use std::time::Duration;
+use web_time::Duration;
 
 /// Error parsing human-friendly duration
 #[derive(Debug, PartialEq, Clone)]

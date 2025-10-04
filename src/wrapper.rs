@@ -1,7 +1,7 @@
 use std::fmt;
 use std::ops::Deref;
 use std::str::FromStr;
-use std::time::{Duration as StdDuration, SystemTime};
+use web_time::{Duration as StdDuration, SystemTime};
 
 use crate::date::{self, format_rfc3339, parse_rfc3339_weak};
 use crate::duration::{self, format_duration, parse_duration};

@@ -1,7 +1,7 @@
 use std::error::Error as StdError;
 use std::fmt;
 use std::str;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(all(
     target_pointer_width = "32",
